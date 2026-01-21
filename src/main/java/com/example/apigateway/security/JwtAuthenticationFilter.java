@@ -31,7 +31,10 @@ public class JwtAuthenticationFilter implements GlobalFilter {
 
     private static final List<String> OPEN_API_ENDPOINTS = List.of(
             "/api/auth/login",
-            "/api/auth/register"
+            "/api/auth/register",
+            "/actuator/health/**",
+            "/actuator/health/**",
+            "/actuator/info"
     );
 
     @Override
