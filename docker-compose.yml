@@ -1,6 +1,5 @@
 version: '3.9'
 
-
 services:
   auth-db:
     image: postgres:16-alpine
@@ -53,6 +52,33 @@ services:
       timeout: 5s
       retries: 5
 
+  payment-mongodb:
+    image: mongo:latest
+    container_name: ${PAYMENT_MONGODB_HOST}
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=${PAYMENT_DB_USER}
+      - MONGO_INITDB_ROOT_PASSWORD=${PAYMENT_DB_PASS}
+      - MONGO_INITDB_DATABASE=${PAYMENT_DB_NAME}
+    networks:
+      - microservice-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.6.0
+    container_name: kafka
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:29093'
+      KAFKA_LISTENERS: 'PLAINTEXT://:29092,CONTROLLER://:29093'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:29092'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      CLUSTER_ID: '${KAFKA_CLUSTER_ID}'
+    networks:
+      - microservice-network
+
   redis:
     image: redis:7.2-alpine
     container_name: common_redis
@@ -61,10 +87,49 @@ services:
     networks:
       - microservice-network
 
+  prometheus:
+    image: prom/prometheus:latest
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - microservice-network
+
+  tempo:
+    image: grafana/tempo:latest
+    command: [ "-config.file=/etc/tempo.yaml" ]
+    volumes:
+      - ./tempo.yaml:/etc/tempo.yaml
+    ports:
+      - "3200:3200"
+      - "4317:4317"
+      - "4318:4318"
+    networks:
+      - microservice-network
+
+  loki:
+    image: grafana/loki:latest
+    container_name: loki
+    ports:
+      - "3100:3100"
+    networks:
+      - microservice-network
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_AUTH_ANONYMOUS_ENABLED=true
+      - GF_AUTH_ANONYMOUS_ORG_ROLE=Admin
+    networks:
+      - microservice-network
 
   auth-service:
     build:
-      context: ../Authentication Service
+      context: "../Authentication Service"
       dockerfile: Dockerfile
     container_name: auth_service
     env_file:
@@ -109,6 +174,24 @@ services:
     networks:
       - microservice-network
 
+  payment-service:
+    build:
+      context: ../PaymentService
+      dockerfile: Dockerfile
+    container_name: payment_service
+    env_file:
+      - .env.docker
+    ports:
+      - "${PAYMENT_SERVICE_PORT}:${PAYMENT_SERVICE_PORT}"
+    environment:
+      - SPRING_DATA_MONGODB_URI=mongodb://${PAYMENT_DB_USER}:${PAYMENT_DB_PASS}@${PAYMENT_MONGODB_HOST}:${PAYMENT_MONGODB_PORT}/${PAYMENT_DB_NAME}?authSource=admin
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS=${KAFKA_BOOTSTRAP_SERVERS}
+    depends_on:
+      - payment-mongodb
+      - kafka
+    networks:
+      - microservice-network
+
   api-gateway:
     build:
       context: ../ApiGateway
@@ -119,12 +202,10 @@ services:
     ports:
       - "8085:8085"
     depends_on:
-      auth-service:
-        condition: service_started
-      user-service:
-        condition: service_started
-      order-service:
-        condition: service_started
+      auth-service: { condition: service_started }
+      user-service: { condition: service_started }
+      order-service: { condition: service_started }
+      payment-service: { condition: service_started }
     networks:
       - microservice-network
 
